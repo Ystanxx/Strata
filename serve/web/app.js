@@ -152,6 +152,43 @@ function setMetric(key, value, unit, sub) {
 
 let lastMetrics = null, metricsFailures = 0, keyWarned = false, mcpTick = 0;
 let reqShowAll = false;   // the Monitor's request table: the last 12, or every one the server keeps (issue #35)
+let unloadOperating = false;
+
+function updateUnloadButton(live = {}) {
+  const button = $("unload-btn"), status = $("unload-status");
+  if (!button) return;
+  const busy = live.queued > 0 || ["reading", "generating"].includes(live.state);
+  const unloaded = live.state === "unloaded";
+  button.disabled = unloadOperating || busy || unloaded;
+  button.textContent = unloadOperating ? "Unloading…" : unloaded ? "Model unloaded" : "Unload model";
+  button.title = unloaded ? "The model is already unloaded" : busy ? "Wait for the current request to finish" :
+    "Release the model now; the next request loads it again";
+  if (status) status.textContent = unloadOperating ? "Releasing memory…" : unloaded ? "Ready for other apps" : "";
+}
+
+async function unloadModel() {
+  if (unloadOperating) return;
+  const live = lastMetrics?.live || {};
+  if (live.queued > 0 || ["reading", "generating"].includes(live.state)) {
+    toast("warn", "Model is busy", "Wait for the current request to finish before unloading.");
+    return;
+  }
+  unloadOperating = true;
+  updateUnloadButton(live);
+  try {
+    const response = await fetch("unload", {method: "POST", headers: headers(true), body: "{}"});
+    let value = {};
+    try { value = await response.json(); } catch (e) { /* keep the HTTP status below */ }
+    if (!response.ok) throw new Error(value.error?.message || value.status || `HTTP ${response.status}`);
+    toast("success", "Model unloaded", "Memory is available again; the next request will load it.");
+  } catch (e) {
+    toast("error", "Unload failed", e.message || String(e), 6000);
+  } finally {
+    unloadOperating = false;
+    updateUnloadButton(lastMetrics?.live || {});
+  }
+}
+$("unload-btn").addEventListener("click", unloadModel);
 async function poll() {
   try {
     const r = await fetch(reqShowAll ? "metrics?requests=all" : "metrics", {headers: headers()});
@@ -238,6 +275,7 @@ function renderTotals(t) {
          `${fmt(t.output_tokens)} written${oSpeed}`;
 }
 function renderMonitor(live, hw, st, eng, h, last, requests, totals, kept) {
+  updateUnloadButton(live);
   // model state
   const on = live.queued > 0 ? "queued" : live.state;
   for (const b of document.querySelectorAll("#state-badges .st-badge")) b.classList.toggle("on", b.dataset.s === on || b.dataset.s === live.state);
